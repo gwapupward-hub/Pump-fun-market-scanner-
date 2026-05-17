@@ -1,5 +1,10 @@
 # Example user crontab entry (UTC) — adjust paths to your install.
+# Uses flock(1) to prevent overlapping runs, and logrotate-friendly append-and-redirect.
 SHELL=/bin/bash
 PATH=/usr/local/bin:/usr/bin:/bin
+MAILTO=ops@example.com
 
-5 0 * * * cd /opt/pump-intel && set -a && source .env && set +a && pump-intel run-job >>/var/log/pump-intel.log 2>&1
+5 0 * * * cd /opt/pump-intel \
+  && /usr/bin/flock -n /var/lock/pump-intel.lock \
+       -c 'set -a && source .env && set +a && pump-intel run-job' \
+       >> /var/log/pump-intel/pump-intel.log 2>&1

@@ -1,20 +1,25 @@
+"""Single-mint scoring — used by unit tests and ad-hoc lookups.
+
+For the daily job, see `pump_intel.services.scoring_bulk.rescore_recent_mints`,
+which folds this logic into one SQL statement.
+"""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pump_intel.db import execute, fetch_one_dict
 
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _ms_to_dt(ms: Any) -> datetime | None:
     if ms is None:
         return None
     try:
-        return datetime.fromtimestamp(float(ms) / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(float(ms) / 1000.0, tz=UTC)
     except (OSError, ValueError, OverflowError, TypeError):
         return None
 
@@ -39,7 +44,6 @@ def score_token(conn, mint: str) -> float:
     score = 20.0
 
     ath = float(snap["ath_market_cap_usd"] or 0)
-    mcap = float(snap["market_cap_usd"] or 0)
     if ath > 0:
         score += min(30.0, (ath / 250_000.0) * 30.0)
 
@@ -66,25 +70,17 @@ def score_token(conn, mint: str) -> float:
         elif float(top) > 25:
             score -= 8.0
 
-    rug = fetch_one_dict(
+    rug_hard = fetch_one_dict(
         conn,
-        """
-        SELECT COUNT(*)::int AS c
-        FROM rug_events
-        WHERE mint = %s AND severity = 'hard'
-        """,
+        "SELECT COUNT(*)::int AS c FROM rug_events WHERE mint = %s AND severity = 'hard'",
         (mint,),
     )
-    if rug and int(rug["c"]) > 0:
-        score -= 25.0 * int(rug["c"])
+    if rug_hard and int(rug_hard["c"]) > 0:
+        score -= 25.0 * int(rug_hard["c"])
 
     rug_soft = fetch_one_dict(
         conn,
-        """
-        SELECT COUNT(*)::int AS c
-        FROM rug_events
-        WHERE mint = %s AND severity = 'soft'
-        """,
+        "SELECT COUNT(*)::int AS c FROM rug_events WHERE mint = %s AND severity = 'soft'",
         (mint,),
     )
     if rug_soft and int(rug_soft["c"]) > 0:

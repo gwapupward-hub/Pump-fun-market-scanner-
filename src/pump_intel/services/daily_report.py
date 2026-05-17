@@ -2,23 +2,37 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
-from pump_intel.db import execute, fetch_all_dict, fetch_one_dict
+import psycopg
+
+from pump_intel.db import execute, executemany, fetch_all_dict, fetch_one_dict, jsonb
 
 
 def _today_utc() -> date:
-    return datetime.now(tz=timezone.utc).date()
+    return datetime.now(tz=UTC).date()
 
 
 def _tokenize(text: str) -> list[str]:
     return [t for t in re.findall(r"[a-zA-Z]{3,}", text.lower()) if len(t) <= 32]
 
 
-def build_daily_report(conn, report_date: date | None = None) -> dict[str, Any]:
+def _to_float(v: Any) -> float | None:
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        return float(v)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_daily_report(conn: psycopg.Connection, report_date: date | None = None) -> dict[str, Any]:
     report_date = report_date or _today_utc()
-    day_start = datetime.combine(report_date, datetime.min.time(), tzinfo=timezone.utc)
+    day_start = datetime.combine(report_date, datetime.min.time(), tzinfo=UTC)
     day_end = day_start + timedelta(days=1)
 
     scanned = fetch_one_dict(
@@ -78,14 +92,17 @@ def build_daily_report(conn, report_date: date | None = None) -> dict[str, Any]:
         conn,
         """
         SELECT
-            MIN(time_to_ath_seconds) FILTER (WHERE time_to_ath_seconds IS NOT NULL AND time_to_ath_seconds > 0)
-                AS fastest_ath_seconds,
+            MIN(time_to_ath_seconds) FILTER (
+                WHERE time_to_ath_seconds IS NOT NULL AND time_to_ath_seconds > 0
+            ) AS fastest_ath_seconds,
             MAX(ath_market_cap_usd) AS highest_ath_usd,
-            AVG(time_to_ath_seconds) FILTER (WHERE time_to_ath_seconds IS NOT NULL AND time_to_ath_seconds > 0)
-                AS avg_time_to_ath_seconds,
+            AVG(time_to_ath_seconds) FILTER (
+                WHERE time_to_ath_seconds IS NOT NULL AND time_to_ath_seconds > 0
+            ) AS avg_time_to_ath_seconds,
             AVG(
                 CASE
-                    WHEN ath_market_cap_usd IS NOT NULL AND ath_market_cap_usd > 0 AND market_cap_usd IS NOT NULL
+                    WHEN ath_market_cap_usd IS NOT NULL AND ath_market_cap_usd > 0
+                         AND market_cap_usd IS NOT NULL
                     THEN GREATEST(0, LEAST(1, 1 - (market_cap_usd / ath_market_cap_usd)))
                 END
             ) AS avg_drawdown_after_ath
@@ -101,28 +118,28 @@ def build_daily_report(conn, report_date: date | None = None) -> dict[str, Any]:
         WITH latest AS (
             SELECT DISTINCT ON (ts.mint)
                 ts.mint,
-                ts.snapshot_at,
-                (ts.raw_coin->>'reply_count')::bigint AS reply_count
+                ts.snapshot_at
             FROM token_snapshots ts
+            WHERE ts.snapshot_at >= %s AND ts.snapshot_at < %s
             ORDER BY ts.mint, ts.snapshot_at DESC
         ),
         joined AS (
             SELECT
                 l.mint,
-                BOOL_OR(ts.is_present AND ts.platform = 'twitter') AS has_twitter,
+                BOOL_OR(ts.is_present AND ts.platform = 'twitter')  AS has_twitter,
                 BOOL_OR(ts.is_present AND ts.platform = 'telegram') AS has_tg,
-                BOOL_OR(ts.is_present AND ts.platform = 'website') AS has_web
+                BOOL_OR(ts.is_present AND ts.platform = 'website')  AS has_web
             FROM latest l
             JOIN token_socials ts ON ts.mint = l.mint
             GROUP BY l.mint
         )
         SELECT
             AVG(CASE WHEN has_twitter THEN 1 ELSE 0 END) AS twitter_rate,
-            AVG(CASE WHEN has_tg THEN 1 ELSE 0 END) AS tg_rate,
-            AVG(CASE WHEN has_web THEN 1 ELSE 0 END) AS web_rate
+            AVG(CASE WHEN has_tg      THEN 1 ELSE 0 END) AS tg_rate,
+            AVG(CASE WHEN has_web     THEN 1 ELSE 0 END) AS web_rate
         FROM joined
         """,
-        None,
+        (day_start, day_end),
     )
 
     name_rows = fetch_all_dict(
@@ -131,8 +148,7 @@ def build_daily_report(conn, report_date: date | None = None) -> dict[str, Any]:
         SELECT t.name, t.ticker, t.classification
         FROM tokens t
         WHERE EXISTS (
-            SELECT 1
-            FROM token_snapshots ts
+            SELECT 1 FROM token_snapshots ts
             WHERE ts.mint = t.mint
               AND ts.snapshot_at >= %s
               AND ts.snapshot_at < %s
@@ -169,14 +185,16 @@ def build_daily_report(conn, report_date: date | None = None) -> dict[str, Any]:
         "top_winners": winners,
         "top_rugs": rugs,
         "fastest_ath_seconds": ath_stats.get("fastest_ath_seconds") if ath_stats else None,
-        "highest_ath_usd": float(ath_stats["highest_ath_usd"]) if ath_stats and ath_stats.get("highest_ath_usd") else None,
-        "avg_time_to_ath_seconds": float(ath_stats["avg_time_to_ath_seconds"]) if ath_stats and ath_stats.get("avg_time_to_ath_seconds") else None,
-        "avg_drawdown_after_ath": float(ath_stats["avg_drawdown_after_ath"]) if ath_stats and ath_stats.get("avg_drawdown_after_ath") is not None else None,
+        "highest_ath_usd": _to_float(ath_stats.get("highest_ath_usd")) if ath_stats else None,
+        "avg_time_to_ath_seconds": _to_float(ath_stats.get("avg_time_to_ath_seconds")) if ath_stats else None,
+        "avg_drawdown_after_ath": _to_float(ath_stats.get("avg_drawdown_after_ath")) if ath_stats else None,
         "winner_theme_tokens": top_themes,
         "ticker_patterns": top_tickers,
         "creator_wallet_low_reputation": creator_insights,
         "social_presence_rates": dict(social) if social else {},
-        "final_market_assessment": _market_assessment(total_scanned, winners, rugs, ath_stats, social),
+        "final_market_assessment": _market_assessment(
+            total_scanned, winners, rugs, ath_stats, social
+        ),
     }
 
     structured = {
@@ -200,33 +218,40 @@ def _market_assessment(
     social: dict | None,
 ) -> str:
     if scanned == 0:
-        return "No fresh snapshots were recorded for this UTC day; widen ingestion limits or confirm scheduler connectivity."
-    wr = len(winners)
-    rr = len(rugs)
-    dd = float(ath_stats["avg_drawdown_after_ath"]) if ath_stats and ath_stats.get("avg_drawdown_after_ath") is not None else None
+        return (
+            "No fresh snapshots were recorded for this UTC day; widen ingestion "
+            "limits or confirm scheduler connectivity."
+        )
+    dd = _to_float(ath_stats.get("avg_drawdown_after_ath")) if ath_stats else None
     parts = [
         f"Scanned {scanned} distinct tokens with intraday snapshots.",
-        f"Leaderboard highlights include {wr} standout winners and {rr} elevated-risk listings under today's filters.",
+        f"Leaderboard shows up to {len(winners)} winner picks and {len(rugs)} elevated-risk listings (top-25 cap).",
     ]
     if dd is not None:
-        parts.append(f"Mean post-ATH drawdown across the batch is about {dd*100:.1f}% (USD mcap ratio heuristic).")
+        parts.append(
+            f"Mean post-ATH drawdown across the batch is about {dd * 100:.1f}% "
+            "(USD mcap ratio heuristic)."
+        )
     if social:
-        tw = float(social.get("twitter_rate") or 0)
-        parts.append(f"Twitter link prevalence in social rows is ~{tw*100:.1f}%.")
+        tw = _to_float(social.get("twitter_rate")) or 0.0
+        parts.append(f"Twitter link prevalence in social rows is ~{tw * 100:.1f}%.")
     return " ".join(parts)
 
 
-def _persist_winner_patterns(conn, report_date: date, themes: list[dict], tickers: list[dict]) -> None:
+def _persist_winner_patterns(
+    conn: psycopg.Connection,
+    report_date: date,
+    themes: list[dict],
+    tickers: list[dict],
+) -> None:
     execute(conn, "DELETE FROM winner_patterns WHERE report_date = %s", (report_date,))
-    rows = []
+    rows: list[tuple[Any, ...]] = []
     for row in themes:
         rows.append((report_date, "name_token", row["token"], int(row["count"]), float(row["count"])))
     for row in tickers:
         rows.append((report_date, "ticker", row["ticker"], int(row["count"]), float(row["count"])))
     if not rows:
         return
-    from pump_intel.db import executemany
-
     executemany(
         conn,
         """
@@ -240,13 +265,19 @@ def _persist_winner_patterns(conn, report_date: date, themes: list[dict], ticker
     )
 
 
-def persist_daily_report(conn, report_date: date, metrics: dict, structured: dict, ai_md: str | None, ai_model: str | None) -> None:
-    from psycopg.types.json import Json
-
+def persist_daily_report(
+    conn: psycopg.Connection,
+    report_date: date,
+    metrics: dict,
+    structured: dict,
+    ai_md: str | None,
+    ai_model: str | None,
+) -> None:
     execute(
         conn,
         """
-        INSERT INTO daily_market_reports (report_date, metrics, structured_summary, ai_markdown, ai_model)
+        INSERT INTO daily_market_reports
+            (report_date, metrics, structured_summary, ai_markdown, ai_model)
         VALUES (%s,%s,%s,%s,%s)
         ON CONFLICT (report_date) DO UPDATE SET
             generated_at = NOW(),
@@ -255,5 +286,5 @@ def persist_daily_report(conn, report_date: date, metrics: dict, structured: dic
             ai_markdown = EXCLUDED.ai_markdown,
             ai_model = EXCLUDED.ai_model
         """,
-        (report_date, Json(metrics), Json(structured), ai_md, ai_model),
+        (report_date, jsonb(metrics), jsonb(structured), ai_md, ai_model),
     )

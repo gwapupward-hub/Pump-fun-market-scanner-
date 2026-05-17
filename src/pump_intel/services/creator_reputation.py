@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import psycopg
+
 from pump_intel.db import execute
 
 
-def recompute_creator_wallets(conn) -> None:
+def recompute_creator_wallets(conn: psycopg.Connection) -> None:
+    """Aggregate per-creator stats from `tokens` and upsert into `creator_wallets`."""
     sql = """
         INSERT INTO creator_wallets (
             address,
@@ -20,43 +23,24 @@ def recompute_creator_wallets(conn) -> None:
             t.creator_wallet AS address,
             NOW(),
             COUNT(*)::int AS tokens_created,
-            SUM(CASE WHEN t.classification = 'soft_rug' THEN 1 ELSE 0 END)::int AS soft_rug_count,
-            SUM(CASE WHEN t.classification = 'hard_rug' THEN 1 ELSE 0 END)::int AS hard_rug_count,
-            SUM(CASE WHEN t.classification = 'abandoned' THEN 1 ELSE 0 END)::int AS abandoned_count,
-            SUM(
-                CASE
-                    WHEN t.classification IN (
-                        'graduated_winner',
-                        'viral_winner',
-                        'bonding_winner',
-                        'micro_winner'
-                    ) THEN 1
-                    ELSE 0
-                END
-            )::int AS winner_count,
-            GREATEST(
-                0,
-                LEAST(
-                    100,
-                    100
-                    - 12 * SUM(CASE WHEN t.classification = 'hard_rug' THEN 1 ELSE 0 END)
-                    - 5 * SUM(CASE WHEN t.classification = 'soft_rug' THEN 1 ELSE 0 END)
-                    - 2 * SUM(CASE WHEN t.classification = 'abandoned' THEN 1 ELSE 0 END)
-                    + 3 * SUM(
-                        CASE
-                            WHEN t.classification IN (
-                                'graduated_winner',
-                                'viral_winner',
-                                'bonding_winner',
-                                'micro_winner'
-                            ) THEN 1
-                            ELSE 0
-                        END
-                    )
-                )
-            )::numeric(12,4) AS reputation_score,
+            SUM(CASE WHEN t.classification = 'soft_rug' THEN 1 ELSE 0 END)::int,
+            SUM(CASE WHEN t.classification = 'hard_rug' THEN 1 ELSE 0 END)::int,
+            SUM(CASE WHEN t.classification = 'abandoned' THEN 1 ELSE 0 END)::int,
+            SUM(CASE WHEN t.classification IN (
+                    'graduated_winner','viral_winner','bonding_winner','micro_winner'
+                ) THEN 1 ELSE 0 END)::int,
+            GREATEST(0, LEAST(100,
+                100
+                - 12 * SUM(CASE WHEN t.classification = 'hard_rug' THEN 1 ELSE 0 END)
+                - 5  * SUM(CASE WHEN t.classification = 'soft_rug' THEN 1 ELSE 0 END)
+                - 2  * SUM(CASE WHEN t.classification = 'abandoned' THEN 1 ELSE 0 END)
+                + 3  * SUM(CASE WHEN t.classification IN (
+                        'graduated_winner','viral_winner','bonding_winner','micro_winner'
+                    ) THEN 1 ELSE 0 END)
+            ))::numeric(12,4),
             '{}'::jsonb
         FROM tokens t
+        WHERE t.creator_wallet IS NOT NULL AND t.creator_wallet <> ''
         GROUP BY t.creator_wallet
         ON CONFLICT (address) DO UPDATE SET
             last_seen_at = EXCLUDED.last_seen_at,

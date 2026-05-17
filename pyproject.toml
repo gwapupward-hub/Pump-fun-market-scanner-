@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pump-intel"
-version = "0.1.0"
+version = "0.2.0"
 description = "Pump.fun market intelligence: ingestion, rug signals, daily reports (analytics only)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,12 +13,23 @@ dependencies = [
   "pydantic>=2.6,<3",
   "pydantic-settings>=2.2,<3",
   "psycopg[binary]>=3.1,<4",
+  "psycopg-pool>=3.2,<4",
   "python-dotenv>=1.0,<2",
   "apscheduler>=3.10,<4",
+  "alembic>=1.13,<2",
+  "sqlalchemy>=2.0,<3",
 ]
 
 [project.optional-dependencies]
 ai = ["openai>=1.40,<2"]
+dev = [
+  "pytest>=8.0,<9",
+  "pytest-asyncio>=0.23,<1",
+  "respx>=0.21,<1",
+  "testcontainers[postgres]>=4.7,<5",
+  "ruff>=0.5,<1",
+  "mypy>=1.10,<2",
+]
 
 [project.scripts]
 pump-intel = "pump_intel.cli:main"
@@ -29,5 +40,50 @@ where = ["src"]
 [tool.setuptools.package-dir]
 "" = "src"
 
-[tool.setuptools.package-data]
-pump_intel = ["schema.sql"]
+# --------------------------- tooling ---------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PL", "RUF"]
+ignore = [
+  "E501",   # long lines are sometimes unavoidable in SQL strings
+  "PLR0913", # let services take wide arg lists
+  "PLR2004", # numeric magic in heuristics
+  "PLR0911", # long if/elif ladders in classification
+  "PLR0912",
+  "PLR0915",
+  "SIM108",  # we prefer explicit if/else for readability in some places
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Lazy imports in tests are intentional — fixtures set env/monkeypatch first.
+"tests/*" = ["PLR2004", "B018", "PLR0915", "PLC0415", "RUF003"]
+"migrations/*" = ["E501"]
+# The connection pool is deliberately a module-level singleton.
+"src/pump_intel/db/pool.py" = ["PLW0603"]
+# Optional / lazy imports avoid pulling heavy deps at startup.
+"src/pump_intel/cli.py" = ["PLC0415"]
+"src/pump_intel/db/__init__.py" = ["PLC0415"]
+"src/pump_intel/db/json.py" = ["PLC0415"]
+"src/pump_intel/services/ai_summary.py" = ["PLC0415"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "integration: integration tests requiring Docker / Postgres",
+]
