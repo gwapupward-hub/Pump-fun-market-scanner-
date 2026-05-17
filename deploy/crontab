@@ -1,0 +1,6 @@
+# Run the daily intelligence pipeline once per day at 00:05 UTC.
+# Analytics only — no trading.
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+5 0 * * * cd /app && python -m pump_intel run-daily >> /tmp/pump-intel.log 2>&1

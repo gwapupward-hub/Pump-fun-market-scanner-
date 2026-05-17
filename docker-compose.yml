@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pumpintel
+      POSTGRES_PASSWORD: pumpintel
+      POSTGRES_DB: pumpintel
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pumpintel -d pumpintel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://pumpintel:pumpintel@postgres:5432/pumpintel
+      PUMPFUN_INGEST_MODE: fixture
+      PUMPFUN_FIXTURE_PATH: /app/fixtures/sample_coins.json
+    volumes:
+      - ./fixtures:/app/fixtures:ro
+    command: ["python", "-m", "pump_intel", "run-daily"]
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://pumpintel:pumpintel@postgres:5432/pumpintel
+      PUMPFUN_INGEST_MODE: fixture
+      PUMPFUN_FIXTURE_PATH: /app/fixtures/sample_coins.json
+    volumes:
+      - ./fixtures:/app/fixtures:ro
+    command: ["/usr/local/bin/supercronic", "/app/deploy/crontab"]
