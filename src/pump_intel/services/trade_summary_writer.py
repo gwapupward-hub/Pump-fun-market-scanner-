@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from pump_intel.db import executemany, fetch_all_dict
+import psycopg
+
+from pump_intel.db import executemany, fetch_all_dict, jsonb
 
 
-def write_trade_summaries_for_recent(conn, *, hours: int = 24) -> int:
-    from psycopg.types.json import Json
+def write_trade_summaries_for_recent(conn: psycopg.Connection, *, hours: int = 24) -> int:
+    """Roll up the latest snapshot per active mint into a `trade_summaries` row.
 
-    now = datetime.now(tz=timezone.utc)
+    `period_end` is bucketed to the top of the current UTC hour so multiple runs
+    inside the same hour collide on the `(mint, period_start, period_end, source)`
+    unique constraint (migration 0003) and upsert in place.
+    """
+    now = datetime.now(tz=UTC).replace(minute=0, second=0, microsecond=0)
     start = now - timedelta(hours=hours)
     rows = fetch_all_dict(
         conn,
@@ -24,23 +30,23 @@ def write_trade_summaries_for_recent(conn, *, hours: int = 24) -> int:
         """,
         (start,),
     )
-    out = []
-    for r in rows:
-        out.append(
-            (
-                r["mint"],
-                start,
-                now,
-                None,
-                None,
-                r.get("volume_24h_usd"),
-                None,
-                "mcap_delta_proxy",
-                Json({"buy_sell_ratio": r.get("buy_sell_ratio")}),
-            )
-        )
-    if not out:
+    if not rows:
         return 0
+
+    payload = [
+        (
+            r["mint"],
+            start,
+            now,
+            None,
+            None,
+            r.get("volume_24h_usd"),
+            None,
+            "mcap_delta_proxy",
+            jsonb({"buy_sell_ratio": r.get("buy_sell_ratio")}),
+        )
+        for r in rows
+    ]
     executemany(
         conn,
         """
@@ -48,8 +54,11 @@ def write_trade_summaries_for_recent(conn, *, hours: int = 24) -> int:
             mint, period_start, period_end,
             buys_count, sells_count, buy_volume_usd, sell_volume_usd,
             source, notes
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (mint, period_start, period_end, source) DO UPDATE SET
+            buy_volume_usd = EXCLUDED.buy_volume_usd,
+            notes = EXCLUDED.notes
         """,
-        out,
+        payload,
     )
-    return len(out)
+    return len(payload)

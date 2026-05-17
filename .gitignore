@@ -4,6 +4,16 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
 .env
+.env.local
+.env.*.local
 .venv/
 venv/
+*.log
+.idea/
+.vscode/
+*.sqlite

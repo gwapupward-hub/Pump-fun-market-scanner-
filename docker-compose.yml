@@ -1,30 +1,88 @@
+name: pump-intel
+
+x-pump-env: &pump-env
+  DATABASE_URL: postgresql://${POSTGRES_USER:-pump}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-pump_intel}
+  PUMP_API_BASE: ${PUMP_API_BASE:-https://frontend-api-v3.pump.fun}
+  PUMP_ORIGIN: ${PUMP_ORIGIN:-https://pump.fun}
+  SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: pump
-      POSTGRES_PASSWORD: pump
-      POSTGRES_DB: pump_intel
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-pump}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-pump_intel}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pump -d pump_intel"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pump} -d ${POSTGRES_DB:-pump_intel}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
-  pump-intel:
+  # Postgres exposed on host loopback only when running with --profile debug.
+  postgres-debug-expose:
+    image: alpine:3.20
+    profiles: ["debug"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    network_mode: "service:postgres"
+    command: ["sh", "-c", "echo 'postgres reachable via 127.0.0.1:5432 (debug profile)'; sleep 1"]
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  migrate:
     build: .
+    profiles: ["migrate"]
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://pump:pump@postgres:5432/pump_intel
-      PUMP_API_BASE: https://frontend-api-v3.pump.fun
-      PUMP_ORIGIN: https://pump.fun
-      # Optional: set a paid RPC for holder enrichment (public RPCs are often rate limited).
-      # SOLANA_RPC_URL: https://api.mainnet-beta.solana.com
-      # Optional LLM layer (OpenAI-compatible):
-      # OPENAI_API_KEY: ...
-      # OPENAI_BASE_URL: https://api.openai.com/v1
+      <<: *pump-env
+      AUTO_MIGRATE: "false"
+    command: ["alembic", "upgrade", "head"]
+    networks: [internal]
+    restart: "no"
+
+  pump-intel:
+    build: .
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *pump-env
     command: ["pump-intel", "scheduler"]
+    healthcheck:
+      test: ["CMD", "pump-intel", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  pgdata:
+    driver: local
