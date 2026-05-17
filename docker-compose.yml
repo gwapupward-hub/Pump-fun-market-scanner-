@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pump
+      POSTGRES_PASSWORD: pump
+      POSTGRES_DB: pump_intel
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pump -d pump_intel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pump-intel:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://pump:pump@postgres:5432/pump_intel
+      PUMP_API_BASE: https://frontend-api-v3.pump.fun
+      PUMP_ORIGIN: https://pump.fun
+      # Optional: set a paid RPC for holder enrichment (public RPCs are often rate limited).
+      # SOLANA_RPC_URL: https://api.mainnet-beta.solana.com
+      # Optional LLM layer (OpenAI-compatible):
+      # OPENAI_API_KEY: ...
+      # OPENAI_BASE_URL: https://api.openai.com/v1
+    command: ["pump-intel", "scheduler"]
