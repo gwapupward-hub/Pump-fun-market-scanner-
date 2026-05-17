@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pump-intel"
+version = "0.1.0"
+description = "Pump.fun market intelligence: ingestion, rug signals, daily reports (analytics only)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx[socks]>=0.27,<0.29",
+  "pydantic>=2.6,<3",
+  "pydantic-settings>=2.2,<3",
+  "psycopg[binary]>=3.1,<4",
+  "python-dotenv>=1.0,<2",
+  "apscheduler>=3.10,<4",
+]
+
+[project.optional-dependencies]
+ai = ["openai>=1.40,<2"]
+
+[project.scripts]
+pump-intel = "pump_intel.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.package-data]
+pump_intel = ["schema.sql"]
