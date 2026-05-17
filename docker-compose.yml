@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pumpintel
+      POSTGRES_PASSWORD: pumpintel
+      POSTGRES_DB: pumpintel
+    ports:
+      - "5432:5432"
+    volumes:
+      - pump_intel_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pumpintel -d pumpintel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  agent:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://pumpintel:pumpintel@postgres:5432/pumpintel
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./reports:/app/reports
+    command: ["python", "-m", "pump_intel.run_daily"]
+
+  scheduler:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://pumpintel:pumpintel@postgres:5432/pumpintel
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./reports:/app/reports
+    command: ["supercronic", "/app/crontab"]
+
+volumes:
+  pump_intel_pg:

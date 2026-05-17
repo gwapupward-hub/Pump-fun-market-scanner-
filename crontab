@@ -1,0 +1,2 @@
+# Run full market scan every 24 hours at 00:05 UTC
+5 0 * * * cd /app && python -m pump_intel.run_daily
