@@ -18,20 +18,28 @@ _pool_lock = threading.Lock()
 
 
 def get_pool() -> ConnectionPool:
-    """Return a process-wide lazily-initialised psycopg connection pool."""
+    """Return a process-wide lazily-initialised psycopg connection pool.
+
+    Opened with `open=False` and a tolerant `min_size=0` floor so a brief DB
+    outage at process startup does not crash the scheduler. The pool's first
+    real `.connection()` call will block until at least one connection is
+    ready (bounded by `db_pool_timeout_s`).
+    """
     global _pool
     if _pool is None:
         with _pool_lock:
             if _pool is None:
                 s = get_settings()
-                _pool = ConnectionPool(
+                pool = ConnectionPool(
                     conninfo=s.database_url,
-                    min_size=s.db_pool_min_size,
+                    min_size=0,
                     max_size=s.db_pool_max_size,
                     timeout=s.db_pool_timeout_s,
                     kwargs={"application_name": "pump-intel"},
-                    open=True,
+                    open=False,
                 )
+                pool.open(wait=False)
+                _pool = pool
                 atexit.register(_close_pool)
                 log.info(
                     "db pool opened",

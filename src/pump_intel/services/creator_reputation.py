@@ -21,7 +21,7 @@ def recompute_creator_wallets(conn: psycopg.Connection) -> None:
         )
         SELECT
             t.creator_wallet AS address,
-            NOW(),
+            MAX(t.last_seen_at) AS last_seen_at,
             COUNT(*)::int AS tokens_created,
             SUM(CASE WHEN t.classification = 'soft_rug' THEN 1 ELSE 0 END)::int,
             SUM(CASE WHEN t.classification = 'hard_rug' THEN 1 ELSE 0 END)::int,

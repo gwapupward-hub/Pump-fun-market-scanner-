@@ -62,6 +62,9 @@ services:
     build: .
     init: true
     restart: unless-stopped
+    # Give the scheduler enough time on SIGTERM to let an in-flight daily run
+    # finish writing (ingest + report persistence can take several minutes).
+    stop_grace_period: 5m
     depends_on:
       postgres:
         condition: service_healthy

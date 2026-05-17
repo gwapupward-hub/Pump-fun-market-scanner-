@@ -104,10 +104,19 @@ class Settings(BaseSettings):
     @field_validator("solana_rpc_url")
     @classmethod
     def _validate_solana_url(cls, v: str | None) -> str | None:
-        if v is None:
+        if v is None or v == "":
             return None
         if not v.startswith(("http://", "https://")):
             raise ValueError("solana_rpc_url must include an http(s) scheme")
+        return v
+
+    @field_validator("openai_api_key", "openai_base_url", mode="before")
+    @classmethod
+    def _coerce_blank_openai_strings(cls, v: object) -> object:
+        # docker-compose interpolates unset vars as empty strings; OpenAI(base_url="")
+        # fails at request time. Treat blank as unset.
+        if isinstance(v, str) and v.strip() == "":
+            return None
         return v
 
 

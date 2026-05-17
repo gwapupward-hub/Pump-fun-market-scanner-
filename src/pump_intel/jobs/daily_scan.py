@@ -20,13 +20,20 @@ log = logging.getLogger(__name__)
 
 
 async def run_daily_job() -> dict:
-    """End-to-end daily pipeline: ingest → analytics → report → retention."""
+    """End-to-end daily pipeline: ingest → analytics → report → retention.
+
+    Each phase runs in its own short DB transaction so the connection pool is
+    never held across the OpenAI round-trip (which can stall for tens of
+    seconds). This keeps pool capacity available for ad-hoc queries
+    (healthcheck, manual `pump-intel prune`, etc.) during a daily run.
+    """
     cid = new_correlation_id()
     log.info("daily job starting", extra={"correlation_id": cid})
 
     ingest_stats = await ingest_latest_coins()
     report_date = datetime.now(tz=UTC).date()
 
+    # Phase 1: post-ingest analytics + housekeeping aggregates.
     with transaction() as conn:
         rug_stats = scan_recent_mints_for_rugs(conn, lookback_hours=72)
         reclass_counts = reclassify_recent_mints(conn, lookback_hours=72)
@@ -34,8 +41,16 @@ async def run_daily_job() -> dict:
         recompute_creator_wallets(conn)
         trade_rows = write_trade_summaries_for_recent(conn, hours=24)
 
+    # Phase 2: build the report (mostly reads; also persists winner_patterns).
+    with transaction() as conn:
         report = build_daily_report(conn, report_date=report_date)
-        ai = generate_ai_markdown(report["metrics"], report["structured_summary"])
+
+    # Phase 3: AI summarisation — runs OUTSIDE any DB transaction so a slow
+    # OpenAI response cannot starve the connection pool.
+    ai = generate_ai_markdown(report["metrics"], report["structured_summary"])
+
+    # Phase 4: persist the report.
+    with transaction() as conn:
         persist_daily_report(
             conn,
             report_date,
@@ -45,6 +60,7 @@ async def run_daily_job() -> dict:
             ai["model"],
         )
 
+    # Phase 5: retention pruning.
     with transaction() as conn:
         prune_stats = prune_old_data(conn)
 

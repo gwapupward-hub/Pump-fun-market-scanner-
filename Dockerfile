@@ -15,7 +15,7 @@ COPY migrations ./migrations
 COPY alembic.ini ./
 
 RUN pip install --upgrade pip wheel \
- && pip install .
+ && pip install ".[ai]"
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
