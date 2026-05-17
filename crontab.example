@@ -1,0 +1,4 @@
+# Run daily at 03:30 UTC (host must have pump-intel on PATH or use full path).
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin
+30 3 * * * cd /opt/pump-intel && /usr/bin/python3 -m pump_intel.cli run-once >> /var/log/pump-intel.log 2>&1

@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pump_intel
+    ports:
+      - "5432:5432"
+    volumes:
+      - pump_intel_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  intel:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/pump_intel
+      PUMP_INGEST_SOURCE: ${PUMP_INGEST_SOURCE:-http}
+      PUMP_API_BEARER: ${PUMP_API_BEARER:-}
+      AI_SUMMARY_ENABLED: ${AI_SUMMARY_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./fixtures:/app/fixtures:ro
+    command: ["python3", "-m", "pump_intel.cli", "serve-scheduler"]
+
+volumes:
+  pump_intel_pg:
