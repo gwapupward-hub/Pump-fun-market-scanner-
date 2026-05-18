@@ -4,9 +4,9 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 
-from pump_intel.config import get_settings
 from pump_intel.db import init_db, transaction
 from pump_intel.jobs.daily_scan import run_daily_job
 from pump_intel.logging import configure_logging, new_correlation_id
@@ -24,6 +24,7 @@ def main() -> int:
     sub.add_parser("run-job", help="Run ingestion + analytics pipeline once.").set_defaults(func=_cmd_run_job)
     sub.add_parser("scheduler", help="Run APScheduler cron (daily, see config).").set_defaults(func=_cmd_scheduler)
     sub.add_parser("healthcheck", help="Probe DB + last report age; exit non-zero on failure.").set_defaults(func=_cmd_healthcheck)
+    sub.add_parser("arena-poker", help="Run the arena.dev.fun poker bot loop.").set_defaults(func=_cmd_arena_poker)
 
     p_prune = sub.add_parser("prune", help="Apply retention policy to historical tables.")
     p_prune.add_argument("--snapshot-days", type=int, default=None)
@@ -32,8 +33,12 @@ def main() -> int:
     p_prune.set_defaults(func=_cmd_prune)
 
     args = parser.parse_args()
-    settings = get_settings()
-    configure_logging(level=settings.log_level, fmt=settings.log_format)
+    # Logging is configured straight from env vars so commands that don't touch
+    # the DB (arena-poker) don't require DATABASE_URL to be set.
+    configure_logging(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        fmt=os.environ.get("LOG_FORMAT", "json"),
+    )
     new_correlation_id()
     return int(args.func(args) or 0)
 
@@ -61,6 +66,12 @@ def _cmd_healthcheck(_args: argparse.Namespace) -> int:
     result = run_healthcheck()
     print(json.dumps(result.summary(), default=str))
     return 0 if result.ok else 1
+
+
+def _cmd_arena_poker(_args: argparse.Namespace) -> int:
+    from pump_intel.arena.bot import run_bot
+
+    return asyncio.run(run_bot())
 
 
 def _cmd_prune(args: argparse.Namespace) -> int:
